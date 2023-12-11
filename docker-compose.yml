@@ -1,0 +1,10 @@
+version: '3'
+services:
+  qlearning:
+    build: .
+    restart: always
+    volumes:
+      - ./files:/app/files
+    command:
+    environment:
+      - TZ=America/Guayaquil
