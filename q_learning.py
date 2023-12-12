@@ -6,6 +6,7 @@ import bd_connector as bc
 import api_connector as api
 import obtener_recompensas as r
 from datetime import datetime, timedelta
+from mqtt_conf import run_publisher
 
 #Constantes
 N_ACCIONES = 3
@@ -17,12 +18,17 @@ UP = 2
 DOWN = 1
 MAINTAIN = 0
  
+ocupancia_list = ['POCA', 'MEDIA', 'MUCHA']
+temp_in_list = ['T1', 'T2']
+temp_ac_list = ['FRIO', 'NEUTRAL', 'CALOR']
+periodo_list = ['P1', 'P2', 'P3']
+
 #Funcion que devuelve las acciones disponibles dependiendo de la temperatura actual del A/C
 def get_actions(estado):
-    ocupancia_list = ['POCA', 'MEDIA', 'MUCHA']
-    temp_in_list = ['T1', 'T2']
-    temp_ac_list = ['FRIO', 'NEUTRAL', 'CALOR']
-    periodo_list = ['P1', 'P2', 'P3']
+    # ocupancia_list = ['POCA', 'MEDIA', 'MUCHA']
+    # temp_in_list = ['T1', 'T2']
+    # temp_ac_list = ['FRIO', 'NEUTRAL', 'CALOR']
+    # periodo_list = ['P1', 'P2', 'P3']
 
     acciones = []
 
@@ -42,10 +48,10 @@ def get_actions(estado):
 
 #Funcion que devuelve el numero del estado segun la lista que recibe. La lista que recibe esta funcion debe tener el siguiente orden ([fecha_y_hora_actual, estado_AC, temperatura_seteada, temperatura_estacion, ocupancia])
 def create_states(ocupancia, temperatura_interna, temperatura_ac, periodo):
-    ocupancia_list = ['POCA', 'MEDIA', 'MUCHA']
-    temp_in_list = ['T1', 'T2']
-    temp_ac_list = ['FRIO', 'NEUTRAL', 'CALOR']
-    periodo_list = ['P1', 'P2', 'P3']
+    # ocupancia_list = ['POCA', 'MEDIA', 'MUCHA']
+    # temp_in_list = ['T1', 'T2']
+    # temp_ac_list = ['FRIO', 'NEUTRAL', 'CALOR']
+    # periodo_list = ['P1', 'P2', 'P3']
     
     i = 0
     for a in periodo_list:
@@ -83,9 +89,10 @@ def get_state (lista_de_valores, recompensa):
         temperatura_ac = 'CALOR'
 
     #Obtener temperatura de la estacion
-    if lista_de_valores[3] >= 21.0 and lista_de_valores[3] < 24.0:
+    # if lista_de_valores[3] >= 21.0 and lista_de_valores[3] < 24.0:
+    if lista_de_valores[3] >= 14.0 and lista_de_valores[3] < 24.0:
         temperatura_interna = 'T1'
-    elif lista_de_valores[3] >= 24.0 and lista_de_valores[3] <= 27.0:
+    elif lista_de_valores[3] >= 24.0: # and lista_de_valores[3] <= 27.0:
         temperatura_interna = 'T2'
     
     #Obtener ocupancia
@@ -336,6 +343,7 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tabla_probabilidades =
                             print("La accion optima es: ", accion_optima)
                             indice_accion_optima = get_index(accion_optima, acciones)
                             print("El indice de la accion optima es: ", indice_accion_optima)
+                            run_publisher(estadoActualLST, acciones, int(accion))
 
                             #Guardar accion optima en tabla pi
                             pi[estadoActualLST-1] = accion_optima
