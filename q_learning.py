@@ -85,12 +85,10 @@ def get_next_state(accion: int, temperatura: int) -> tuple[tuple[int, int], int]
         return get_state(ic.get_last_values(), None), temperatura+2
 
 def get_reward(estado: int) -> int:
-    #//TODO: ACTUALIZAR RECOMPENSAS
     promedio = mc.get_neutral_votes_avg(timedelta(minutes=60))
-    promedio_consumo = ic.get_avg_last_hour_consume()
     if promedio is not None:
         #obtener recompensa online
-        if promedio >= 0.5 and promedio_consumo <= 40:
+        if promedio >= 0.5:
             return 1
         else:
             return 0
@@ -99,6 +97,12 @@ def get_reward(estado: int) -> int:
         diccionario = r.estados_recompensas()
         recompensa = diccionario[estado]
         return recompensa
+
+def get_consume_reward(estado: int) -> int:
+    """
+       Calculates a reward based on consumption level. 
+    """
+    return 1 if ic.get_avg_last_hour_consume() or 0 <= 40 else 0
     
 def qlearning(alpha: float, gamma: float, epsilon: float, tau: float = 0.5, tabla_probabilidades = None, tabla_q = None, tabla_politicas = None):
     now = datetime.now()
@@ -148,11 +152,12 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tau: float = 0.5, tabl
                             print("HUBO UN CAMBIO MANUAL")
                             temp_q = temp_actual 
                             temp_anterior = temp_actual
-                            time.sleep(60*30)
+                            # time.sleep(60*30)
+                            time.sleep(60)
                         else:
                             print("usando algortimo...")
                             #Esto se realiza cuando el usuario no ha hecho nada
-                            time.sleep(60) #Tiempo en segundos.
+                            time.sleep(0.01) #Tiempo en segundos.
 
                             #Obtener estado del LST (ultimos valores registrados en influx)
                             lista = ic.get_last_values()
@@ -173,6 +178,8 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tau: float = 0.5, tabl
                             #print("La temperatura anterior es: ", temp_anterior ) 
                             #obtenemos recompensa
                             recompensa = get_reward(nuevo_estado_LST[0])
+                            recompensa_consumo = get_consume_reward(nuevo_estado_LST[0])
+                            recompensa = ((1 - tau) * (recompensa_consumo)) + (tau * recompensa)
                             print("La recompensa es: ", recompensa) 
 
                             #Actualizar tabla Q
@@ -187,7 +194,10 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tau: float = 0.5, tabl
                             #Determinar accion optima
                             accion_optima = q_table[estadoActualLST].index(max(q_table[estadoActualLST]))
                             print("La accion optima es: ", accion_optima)
-                            indice_accion_optima = acciones.index(accion_optima)
+                            try:
+                                indice_accion_optima = acciones.index(accion_optima)
+                            except:
+                                indice_accion_optima = 1
                             print("El indice de la accion optima es: ", indice_accion_optima)
                             run_publisher(estadoActualLST, acciones, int(accion))
 
