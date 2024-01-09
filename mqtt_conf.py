@@ -12,9 +12,10 @@ ocupancia_list = ['POCA', 'MEDIA', 'MUCHA']
 temp_in_list = ['T1', 'T2']
 temp_ac_list = ['FRIO', 'NEUTRAL', 'CALOR']
 periodo_list = ['P1', 'P2', 'P3']
+consumo_ac = ['ALTO', 'BAJO']
 
 ACTION = {0: "MANTUVO", 1: "DISMINUCIÓN", 2: "AUMENTO"}
-ESTADOS = list(product(ocupancia_list, temp_in_list, temp_ac_list, periodo_list))
+ESTADOS = list(product(ocupancia_list, temp_in_list, temp_ac_list, periodo_list, consumo_ac))
 
 def connect_mqtt() -> mqtt_client:
     def on_connect(client, usedata, flags, rc):
@@ -31,7 +32,7 @@ def connect_mqtt() -> mqtt_client:
 
 
 def publish(client: mqtt_client, ea,  at):
-    client.publish(BASE_TOPIC + "estado_actual", ",".join(map(str, ESTADOS[ea])))
+    client.publish(BASE_TOPIC + "estado_actual", ",".join(map(str, ESTADOS[ea - 1])))
     client.publish(BASE_TOPIC + "accion_realizada", ACTION[at])
 
 

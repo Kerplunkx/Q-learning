@@ -1,131 +1,96 @@
 import os
-import csv
 import time
+import utils
 import numpy as np
-import bd_connector as bc
+import mongo_connector as mc
+import influx_connector as ic
 import api_connector as api
 import obtener_recompensas as r
 from datetime import datetime, timedelta
-from mqtt_conf import run_publisher
+from mqtt_conf import run_publisher 
+from itertools import product
 
 #Constantes
 N_ACCIONES = 3
-N_ESTADOS = 54
+N_ESTADOS = 108
 N_EPISODIOS = 20
 N_PASOS = 30
 #Acciones
 UP = 2
 DOWN = 1
 MAINTAIN = 0
- 
+
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+
 ocupancia_list = ['POCA', 'MEDIA', 'MUCHA']
 temp_in_list = ['T1', 'T2']
 temp_ac_list = ['FRIO', 'NEUTRAL', 'CALOR']
 periodo_list = ['P1', 'P2', 'P3']
+consumo_ac = ['ALTO', 'BAJO']
 
-#Funcion que devuelve las acciones disponibles dependiendo de la temperatura actual del A/C
-def get_actions(estado):
-    # ocupancia_list = ['POCA', 'MEDIA', 'MUCHA']
-    # temp_in_list = ['T1', 'T2']
-    # temp_ac_list = ['FRIO', 'NEUTRAL', 'CALOR']
-    # periodo_list = ['P1', 'P2', 'P3']
+ESTADOS = list(product(ocupancia_list, temp_in_list, temp_ac_list, periodo_list, consumo_ac))
 
-    acciones = []
+def get_actions(estado: int) -> list[int]:
+    """
+        Funcion que devuelve las acciones disponibles dependiendo de la temperatura actual del A/C
+    """
+    acciones = [MAINTAIN]
+    temp = api.obtener_temperatura_actual()
+    promedio_consumo = ic.get_avg_last_hour_consume()
 
-    i = 0
-    for a in periodo_list:
-        for b in ocupancia_list:
-            for c in temp_in_list:
-                for d in temp_ac_list:
-                    i += 1
-                    if i == estado:
-                        acciones.append(MAINTAIN)
-                        if d != 'FRIO':
-                            acciones.append(DOWN)
-                        if d != 'CALOR':
-                            acciones.append(UP)
+    if ESTADOS[estado - 1][2] == "NEUTRAL": 
+        acciones.append(MAINTAIN)
+    if ESTADOS[estado - 1][2] == "FRIO":
+        if temp !=  16 and promedio_consumo <= 40:
+            acciones.append(DOWN)
+        else:
+            acciones.append(UP)
+    if ESTADOS[estado - 1][2] == "CALOR":
+        if temp !=  24 and promedio_consumo <= 40:
+            acciones.append(UP)
+        else:
+            acciones.append(DOWN)
+                          
     return acciones
 
-#Funcion que devuelve el numero del estado segun la lista que recibe. La lista que recibe esta funcion debe tener el siguiente orden ([fecha_y_hora_actual, estado_AC, temperatura_seteada, temperatura_estacion, ocupancia])
-def create_states(ocupancia, temperatura_interna, temperatura_ac, periodo):
-    # ocupancia_list = ['POCA', 'MEDIA', 'MUCHA']
-    # temp_in_list = ['T1', 'T2']
-    # temp_ac_list = ['FRIO', 'NEUTRAL', 'CALOR']
-    # periodo_list = ['P1', 'P2', 'P3']
-    
-    i = 0
-    for a in periodo_list:
-        for b in ocupancia_list:
-            for c in temp_in_list:
-                for d in temp_ac_list:
-                    i += 1
-                    if b == ocupancia and  c == temperatura_interna and d == temperatura_ac and a == periodo:
-                        return i
+def get_state (lista_de_valores: list[str], recompensa: int) -> tuple[int, int]:
+    """
+        Funcion que devuelve el estado actual del LST. 
+        La lista que recibe esta funcion debe tener el siguiente orden 
+        ([fecha_y_hora_actual, estado_AC, temperatura_seteada, temperatura_estacion, ocupancia, consumo])
+    """
+    assert len(lista_de_valores) == 6, f"get_state list expected len of 6, but got {len(lista_de_valores)}"
 
-#Funcion que devuelve el estado actual del LST. La lista que recibe esta funcion debe tener el siguiente orden ([fecha_y_hora_actual, estado_AC, temperatura_seteada, temperatura_estacion, ocupancia])
-def get_state (lista_de_valores, recompensa):
-    #Obtener periodo del dia
-    if type(lista_de_valores[0]) == datetime:
-        if lista_de_valores[0].hour >= 8 and lista_de_valores[0].hour < 11:
-            periodo = 'P1'
-        elif lista_de_valores[0].hour >= 11 and lista_de_valores[0].hour < 14:
-            periodo = 'P2'
-        elif lista_de_valores[0].hour >= 14 and lista_de_valores[0].hour <= 18:
-            periodo = 'P3'
-    else:
-        if lista_de_valores[0] >= 8 and lista_de_valores[0] < 11:
-            periodo = 'P1'
-        elif lista_de_valores[0] >= 11 and lista_de_valores[0] < 14:
-            periodo = 'P2'
-        elif lista_de_valores[0] >= 14 and lista_de_valores[0] <= 18:
-            periodo = 'P3'
+    periodo = utils.get_day_period_label(lista_de_valores[0])
+    temperatura_ac = utils.get_ac_temp_label(lista_de_valores[2])
+    temperatura_interna = utils.get_amb_temp_label(lista_de_valores[3])
+    ocupancia = utils.get_occupancy_label(lista_de_valores[4])
+    consumo= utils.get_consume_label(lista_de_valores[5])
 
-    #Obtener temperatura A/C
-    if lista_de_valores[2] >= 16.0 and lista_de_valores[2] < 20.0:
-        temperatura_ac = 'FRIO'
-    elif lista_de_valores[2] >= 20.0 and lista_de_valores[2] < 23.0:
-        temperatura_ac = 'NEUTRAL'
-    elif lista_de_valores[2] >= 23.0 and lista_de_valores[2] <= 24.0:
-        temperatura_ac = 'CALOR'
+    return (ESTADOS.index((ocupancia, temperatura_interna, temperatura_ac, periodo, consumo)) + 1, recompensa)
 
-    #Obtener temperatura de la estacion
-    # if lista_de_valores[3] >= 21.0 and lista_de_valores[3] < 24.0:
-    if lista_de_valores[3] >= 14.0 and lista_de_valores[3] < 24.0:
-        temperatura_interna = 'T1'
-    elif lista_de_valores[3] >= 24.0: # and lista_de_valores[3] <= 27.0:
-        temperatura_interna = 'T2'
-    
-    #Obtener ocupancia
-    if lista_de_valores[4] >= 0.0 and lista_de_valores[4] < 7.0:
-        ocupancia = 'POCA'
-    elif lista_de_valores[4] >= 7.0 and lista_de_valores[4] < 14.0:
-        ocupancia = 'MEDIA'
-    elif lista_de_valores[4] >= 14.0 and lista_de_valores[4] <= 20.0:
-        ocupancia = 'MUCHA'
+def get_next_state(accion: int, temperatura: int) -> tuple[tuple[int, int], int]:
+    """
+        Applies the action chosen by the model.
+    """
+    assert 16 <= temperatura <= 24, f"get_next_state expected a 'temperatura' in the range [16, 24] but got {temperatura}"
 
-    #Obtener estado 
-    return (create_states(ocupancia, temperatura_interna, temperatura_ac, periodo), recompensa)
-
-def get_next_state(accion: int, temperatura):
-    #accionar
-    #obtener estado
     if accion == 0:
-        #temperatura = api.obtener_temperatura_actual()
-        return get_state(bc.obtener_infllux_ultimos(), None), temperatura
+        return get_state(ic.get_last_values(), None), temperatura
     elif accion == 1:
-        #temperatura = api.obtener_temperatura_actual()
         api.cambiar_temperatura_actual(temperatura-2)
-        return get_state(bc.obtener_infllux_ultimos(), None), temperatura-2
+        return get_state(ic.get_last_values(), None), temperatura-2
     elif accion == 2:
-        #temperatura = api.obtener_temperatura_actual()
         api.cambiar_temperatura_actual(temperatura+2)
-        return get_state(bc.obtener_infllux_ultimos(), None), temperatura+2
+        return get_state(ic.get_last_values(), None), temperatura+2
 
-def get_reward(estado: int):
-    promedio = bc.obtener_monogo_prom(timedelta(minutes=60))
+def get_reward(estado: int) -> int:
+    #//TODO: ACTUALIZAR RECOMPENSAS
+    promedio = mc.get_neutral_votes_avg(timedelta(minutes=60))
+    promedio_consumo = ic.get_avg_last_hour_consume()
     if promedio is not None:
         #obtener recompensa online
-        if promedio >= 0.5:
+        if promedio >= 0.5 and promedio_consumo <= 40:
             return 1
         else:
             return 0
@@ -135,126 +100,7 @@ def get_reward(estado: int):
         recompensa = diccionario[estado]
         return recompensa
     
-def get_index(accion, lista_acciones):
-    if len(lista_acciones) != N_ACCIONES:
-        if accion==2:
-            return 1
-        else:
-            return accion
-    else:
-        return accion
-
-def save_tables(tabla_q, tabla_prob, tabla_pi, nombre_archivo: str):
-    with open(nombre_archivo, 'w', newline='') as archivo_csv:
-        #Crear el escritor CSV
-        escritor_csv = csv.writer(archivo_csv)
-
-        #Guardar Tabla q
-        escritor_csv.writerow(["Tabla_q", datetime.now()])
-        for i in tabla_q.keys():
-            num_datos=len(tabla_q[i])
-            fila=[]
-            fila.append(i)
-            for dato in range(0,num_datos):
-                fila.append(tabla_q[i][dato])
-            escritor_csv.writerow(fila)
-        
-        #Guardar Tabla de probabilidades
-        escritor_csv.writerow(["Tabla_prob", datetime.now()])
-        for i in tabla_prob.keys():
-            num_datos=len(tabla_prob[i])
-            fila=[]
-            fila.append(i)
-            for dato in range(0,num_datos):
-                fila.append(tabla_prob[i][dato])
-            escritor_csv.writerow(fila)
-
-        #Guardar tabla de politicas
-        escritor_csv.writerow(["Tabla_pi", datetime.now()])
-        for i in range(0, len(tabla_pi)):
-            fila=[int(i)+1,int(tabla_pi[i])]
-            escritor_csv.writerow(fila)
-
-def save_all_tables(tabla_q, tabla_prob, tabla_pi, nombre_archivo: str):
-    #Abrir el archivo en modo de escritura
-    with open(nombre_archivo, 'a', newline='') as archivo_csv:
-        #Crear el escritor CSV
-        escritor_csv = csv.writer(archivo_csv)
-
-        #Guardar Tabla q
-        escritor_csv.writerow(["Tabla_q", datetime.now()])
-        for i in tabla_q.keys():
-            num_datos=len(tabla_q[i])
-            fila=[]
-            fila.append(i)
-            for dato in range(0,num_datos):
-                fila.append(tabla_q[i][dato])
-            escritor_csv.writerow(fila)
-        
-        #Guardar Tabla de probabilidades
-        escritor_csv.writerow(["Tabla_prob", datetime.now()])
-        for i in tabla_prob.keys():
-            num_datos=len(tabla_prob[i])
-            fila=[]
-            fila.append(i)
-            for dato in range(0,num_datos):
-                fila.append(tabla_prob[i][dato])
-            escritor_csv.writerow(fila)
-
-        #Guardar tabla de politicas
-        escritor_csv.writerow(["Tabla_pi", datetime.now()])
-        for i in range(0, len(tabla_pi)):
-            fila=[int(i)+1,int(tabla_pi[i])]
-            escritor_csv.writerow(fila)
-
-#Se retornan las tablas en el siguiente orden (tabla_q, tabla_prob, tabla_pi)
-def import_tables(nombre_archivo: str):
-    diccionarios = []
-    bloque_actual = None
-
-    with open(nombre_archivo, 'r', newline='') as archivo_csv:
-        lector_csv = csv.reader(archivo_csv)
-        strings_a_buscar=["Tabla_q", "Tabla_prob", "Tabla_pi"]
-
-        nombre_tabla = ""
-        for fila in lector_csv:
-            #print(fila)
-            if (any(fila[0] == s for s in strings_a_buscar)):
-                nombre_tabla=fila[0]
-                bloque_actual = {}
-                if nombre_tabla == "Tabla_pi":
-                    bloque_actual = []
-                diccionarios.append(bloque_actual)
-            else:
-                clave = fila[0]
-                clave_int = int(clave)
-                if nombre_tabla == "Tabla_pi":
-                    valor_int = int(fila[1])
-                    #print(clave_int)
-                    bloque_actual.append(valor_int)
-                else:
-                    lista=[]
-                    for i in range(1, len(fila)):
-                        valor_float = float(fila[i])
-                        lista.append(valor_float)
-                    bloque_actual[clave_int] = lista
-    return diccionarios
-
-#Crear directorio para archivos csv
-def crear_directorio(nombre_directorio):
-    directorio_script = os.path.dirname(__file__)
-    ruta_completa = os.path.join(directorio_script, nombre_directorio)
-    
-    if os.path.exists(ruta_completa):
-        return 0
-    else:
-        try:
-            os.makedirs(ruta_completa, exist_ok=True)
-            return 0
-        except OSError as error:
-            return 1
-
-def qlearning(alpha: float, gamma: float, epsilon: float, tabla_probabilidades = None, tabla_q = None, tabla_politicas = None):
+def qlearning(alpha: float, gamma: float, epsilon: float, tau: float = 0.5, tabla_probabilidades = None, tabla_q = None, tabla_politicas = None):
     now = datetime.now()
     day_of_week = now.weekday()
     hour = now.hour
@@ -263,13 +109,13 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tabla_probabilidades =
     if 0 <= day_of_week <= 4:
         #Inicializar tabla de probabilidades estocasticas para cada accion
         if tabla_probabilidades is None:
-            pi_q = {k:[1/len(get_actions(k)) for a in range(len(get_actions(k)))] for k in range(1,55)}
+            pi_q = {k:[1/len(get_actions(k)) for a in range(len(get_actions(k)))] for k in range(1, N_ESTADOS + 1)}
         else:
             pi_q = tabla_probabilidades
         
         #inicializar diccionario con valores q para todos los estados, diccionario se inicializa en 0
         if tabla_q is None:
-            q_table = {k:[0 for a in range(len(get_actions(k)))] for k in range(1, 55)}
+            q_table = {k:[0 for a in range(len(get_actions(k)))] for k in range(1, N_ESTADOS + 1)}
         else:
             q_table = tabla_q
 
@@ -296,8 +142,8 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tabla_probabilidades =
                     if api.obtener_estado_actual() == 1:
                         temp_actual = api.obtener_temperatura_actual()
                         print("la temp actual es: ", temp_actual)
-                        #print("la temp anterior es: ", temp_anterior)
-                        #print("la temp q es: ", temp_q)
+                        print("la temp anterior es: ", temp_anterior)
+                        print("la temp q es: ", temp_q)
                         if (temp_q != temp_actual):
                             print("HUBO UN CAMBIO MANUAL")
                             temp_q = temp_actual 
@@ -306,10 +152,10 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tabla_probabilidades =
                         else:
                             print("usando algortimo...")
                             #Esto se realiza cuando el usuario no ha hecho nada
-                            time.sleep(60) #Tiempo en segundos. (1 minuto)
+                            time.sleep(60) #Tiempo en segundos.
 
                             #Obtener estado del LST (ultimos valores registrados en influx)
-                            lista = bc.obtener_infllux_ultimos()
+                            lista = ic.get_last_values()
                             print("variables: ", lista)
                             estadoActualLST,_ = get_state(lista, None)
                             print("el estado actual es: ", estadoActualLST) 
@@ -318,12 +164,12 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tabla_probabilidades =
                             print("Estas son las acciones disponibles: ", acciones)
                             #Obtener accion random con la lista de acciones obtenidos previamente
                             prob = pi_q[estadoActualLST]
-                            print(prob)
+                            print("Probabilidades: ", prob)
                             accion = np.random.choice(acciones, p=prob)
                             #Obtenemos el siguiente estado
                             nuevo_estado_LST, temp_q = get_next_state(accion, temp_actual)
                             print("La accion realizada es: ", accion)
-                            print("el indice de la accion es: ", get_index(accion, acciones))
+                            print("El indice de la accion es: ", acciones.index(accion))
                             #print("La temperatura anterior es: ", temp_anterior ) 
                             #obtenemos recompensa
                             recompensa = get_reward(nuevo_estado_LST[0])
@@ -331,29 +177,30 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tabla_probabilidades =
 
                             #Actualizar tabla Q
                             print("esto q_table del estado actual: ",q_table[estadoActualLST])
-                            p1=q_table[estadoActualLST][get_index(accion, acciones)]
+                            p1=q_table[estadoActualLST][acciones.index(accion)]
                             #print("p1 es: ", p1)
                             p2=np.max(q_table[nuevo_estado_LST[0]])
                             #print("p2 es: ", p2)
-                            q_table[estadoActualLST][get_index(accion, acciones)] =  p1+ alpha * (recompensa + gamma*p2 - p1)
+                            q_table[estadoActualLST][acciones.index(accion)] =  p1+ alpha * (recompensa + gamma*p2 - p1)
                             print("Estos son los nuevos valores q: ", q_table[estadoActualLST])
 
                             #Determinar accion optima
                             accion_optima = q_table[estadoActualLST].index(max(q_table[estadoActualLST]))
                             print("La accion optima es: ", accion_optima)
-                            indice_accion_optima = get_index(accion_optima, acciones)
+                            indice_accion_optima = acciones.index(accion_optima)
                             print("El indice de la accion optima es: ", indice_accion_optima)
                             run_publisher(estadoActualLST, acciones, int(accion))
 
                             #Guardar accion optima en tabla pi
-                            pi[estadoActualLST-1] = accion_optima
+                            pi[estadoActualLST - 1] = accion_optima
 
-                            for i in acciones:
-                                indice = acciones.index(i)
-                                if indice == indice_accion_optima:
-                                    pi_q[estadoActualLST][indice] = 1 - epsilon + epsilon/len(acciones)
+                            #//WARNING: PROB PROBLEM
+                            for i in range(len(acciones)):
+                                if i == indice_accion_optima:
+                                    pi_q[estadoActualLST][i] = 1 - epsilon + epsilon/len(acciones)
                                 else:
-                                    pi_q[estadoActualLST][indice] = epsilon/len(acciones)
+                                    pi_q[estadoActualLST][i] = epsilon/len(acciones)
+                                    
                             
                             print("Estas son las nuevas probabilidades: ", pi_q[estadoActualLST])
                             #muerte=np.random.choice(acciones, p=pi_q[estadoActualLST])
@@ -375,8 +222,8 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tabla_probabilidades =
                 print("\n")
             if api.obtener_estado_actual() == 1 and 8 <= hour < 18: #REVISAR ESTE IF
                 #print("aqui entro a guardar")
-                save_tables(q_table, pi_q, pi, "./csv_files/last_tables.csv")
-                save_all_tables(q_table, pi_q, pi, "./csv_files/hitorical_record.csv")
+                utils.save_tables(q_table, pi_q, pi, THIS_DIR + "/csv_files/last_tables.csv")
+                utils.save_all_tables(q_table, pi_q, pi, THIS_DIR + "/csv_files/hitorical_record.csv")
                 #print("guarde")
         return q_table, pi_q, pi
 
@@ -386,10 +233,10 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tabla_probabilidades =
 
                     
 def main():
-    directorio_existe = crear_directorio("csv_files")
-    if directorio_existe == 0:
+    directorio_existe = utils.create_directory("csv_files")
+    if not directorio_existe:
         try:
-            lista = import_tables("./csv_files/last_tables.csv") #(tabla_q, tabla_prob, tabla_pi)
+            lista = utils.import_tables(THIS_DIR + "/csv_files/last_tables.csv") #(tabla_q, tabla_prob, tabla_pi)
             tabla_q = lista[0]
             tabla_prob = lista[1]
             tabla_pi = lista[2]
@@ -401,8 +248,8 @@ def main():
             #El valor alpha determina que tan rapido se obtienen los valores q. El valor gamma determina la ponderacion de las recompensas futuras con respecto a la recompensa inmediata \
             #El valor epsilon determina la probabilidad de explorar. 
             tabla_q, tabla_prob, tabla_pi = qlearning(alpha=0.3, gamma=0.9, epsilon=0.9, tabla_probabilidades=tabla_prob, tabla_q=tabla_q, tabla_politicas=tabla_pi)
-    else:
-        return
+        else:
+            return
         
 if __name__ == "__main__":
     main()
