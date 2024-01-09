@@ -152,12 +152,11 @@ def qlearning(alpha: float, gamma: float, epsilon: float, tau: float = 0.5, tabl
                             print("HUBO UN CAMBIO MANUAL")
                             temp_q = temp_actual 
                             temp_anterior = temp_actual
-                            # time.sleep(60*30)
-                            time.sleep(60)
+                            time.sleep(60*30)
                         else:
                             print("usando algortimo...")
                             #Esto se realiza cuando el usuario no ha hecho nada
-                            time.sleep(0.01) #Tiempo en segundos.
+                            time.sleep(60) #Tiempo en segundos.
 
                             #Obtener estado del LST (ultimos valores registrados en influx)
                             lista = ic.get_last_values()
